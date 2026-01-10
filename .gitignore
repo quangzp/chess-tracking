@@ -1,0 +1,9 @@
+__pycache__/
+.vscode/
+.venv/
+*test*
+runs/
+session_data.json
+sqdict.json
+*demo*
+calibrate_manual_oriented.py

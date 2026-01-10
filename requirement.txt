@@ -1,0 +1,8 @@
+opencv-python
+numpy
+python-chess
+Pillow
+cairosvg
+ultralytics
+torch
+torchvision
