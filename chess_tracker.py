@@ -131,7 +131,7 @@ class ChessBoardTracker:
             'total_frames': self.frame_count,
             'total_moves': len(self.move_history),
             'move_history': self.move_history,
-            'final_board_state': self.get_board_state(),
+            #'final_board_state': self.get_board_state(),
             'camera_rotation': self.cam_rot,
             'calibration_file': self.sqdict_path
         }

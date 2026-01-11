@@ -25,6 +25,8 @@ class ChessPieceDetector:
         self.sqdict = self._load_sqdict()
         self.piece_classes = self._setup_piece_classes()
         self.previous_positions = {}  # Track previous piece positions
+        self.piece_centers = {}  # Store center positions for motion detection
+        self.min_move_distance = 15  # Minimum pixel distance to register a move
         
     def _load_sqdict(self):
         """Load the calibration data (square coordinates)."""
@@ -35,9 +37,6 @@ class ChessPieceDetector:
             return json.load(f)
     
     def _setup_piece_classes(self):
-        """Setup chess piece class mapping. Requires training or using a chess-specific model."""
-        # Standard COCO classes contain person, horse, dog, etc.
-        # For production, you should train YOLO on chess piece dataset
         piece_mapping = {
             'pawn': 'pawn',
             'knight': 'knight',  
@@ -49,18 +48,8 @@ class ChessPieceDetector:
         return piece_mapping
     
     def detect_pieces(self, frame, confidence_threshold=0.5, persist_tracks=True):
-        """
-        Track chess pieces in the frame using YOLO11 tracking.
         
-        Args:
-            frame: Input image/frame
-            confidence_threshold: Minimum confidence for detections
-            persist_tracks: Whether to persist tracks across frames
-            
-        Returns:
-            List of detected/tracked pieces with track IDs and positions
-        """
-        # Use track() instead of predict() for continuous tracking
+        # Track pieces with persistent IDs across frames
         results = self.model.track(frame, conf=confidence_threshold, persist=persist_tracks, verbose=False)
         
         detections = []
@@ -120,15 +109,6 @@ class ChessPieceDetector:
         return result >= 0
     
     def map_pieces_to_squares(self, detections):
-        """
-        Map tracked pieces to board squares.
-        
-        Args:
-            detections: List of detected/tracked pieces from detect_pieces()
-            
-        Returns:
-            Dictionary mapping square names (e.g., 'a1') to piece information with track_id
-        """
         piece_positions = {}
         
         for detection in detections:
@@ -174,50 +154,73 @@ class ChessPieceDetector:
                 prev_track_map[track_id] = (square, piece_info)
         
         # Detect moves using track IDs (more reliable)
+        matched_prev_squares = set()  # Track which previous squares have been matched
+        matched_curr_squares = set()  # Track which current squares have been matched
+        
         for track_id, (curr_square, curr_piece) in current_track_map.items():
             if track_id in prev_track_map:
                 prev_square, prev_piece = prev_track_map[track_id]
                 if curr_square != prev_square:
-                    # Same piece moved to different square
-                    moves.append({
-                        'from': prev_square,
-                        'to': curr_square,
-                        'piece': curr_piece['class'],
-                        'track_id': track_id,
-                        'type': 'move'
-                    })
+                    # Calculate distance moved (motion smoothing)
+                    prev_center = prev_piece['center']
+                    curr_center = curr_piece['center']
+                    distance = np.sqrt((curr_center[0] - prev_center[0])**2 + 
+                                     (curr_center[1] - prev_center[1])**2)
+                    
+                    # Only register move if distance exceeds threshold
+                    if distance >= self.min_move_distance:
+                        moves.append({
+                            'from': prev_square,
+                            'to': curr_square,
+                            'piece': curr_piece['class'],
+                            'track_id': track_id,
+                            'type': 'move',
+                            'distance': float(distance)
+                        })
+                        matched_prev_squares.add(prev_square)
+                        matched_curr_squares.add(curr_square)
+                else:
+                    # Same square, piece stayed
+                    matched_prev_squares.add(prev_square)
+                    matched_curr_squares.add(curr_square)
         
-        # Fallback: detect by piece type if track_id not available
-        for square, piece_info in current_positions.items():
-            if piece_info['track_id'] == -1:  # No valid track ID
-                if square not in self.previous_positions:
-                    # Check if piece disappeared from another square
-                    for prev_square, prev_piece in self.previous_positions.items():
-                        if prev_piece['class'] == piece_info['class'] and prev_square not in current_positions:
-                            moves.append({
-                                'from': prev_square,
-                                'to': square,
-                                'piece': piece_info['class'],
-                                'track_id': -1,
-                                'type': 'move'
-                            })
-                            break
+        # Fallback: Match by piece type + position for unmatched pieces
+        # This handles cases where track_id is lost between frames
+        unmatched_curr = {sq: info for sq, info in current_positions.items() 
+                         if sq not in matched_curr_squares}
+        unmatched_prev = {sq: info for sq, info in self.previous_positions.items() 
+                         if sq not in matched_prev_squares}
         
+        for curr_square, curr_piece in unmatched_curr.items():
+            # Find matching piece in previous frame by type
+            for prev_square, prev_piece in unmatched_prev.items():
+                if prev_piece['class'] == curr_piece['class']:
+                    # Found potential match - check distance
+                    prev_center = prev_piece['center']
+                    curr_center = curr_piece['center']
+                    distance = np.sqrt((curr_center[0] - prev_center[0])**2 + 
+                                     (curr_center[1] - prev_center[1])**2)
+                    
+                    if distance >= self.min_move_distance:
+                        moves.append({
+                            'from': prev_square,
+                            'to': curr_square,
+                            'piece': curr_piece['class'],
+                            'track_id': curr_piece['track_id'],
+                            'type': 'move',
+                            'distance': float(distance),
+                            'fallback_match': True
+                        })
+                        # Mark as matched
+                        unmatched_prev.pop(prev_square, None)
+                        break
+        
+        # Update tracking dictionary for next frame
+        self.piece_centers = {square: info['center'] for square, info in current_positions.items()}
         self.previous_positions = current_positions.copy()
         return moves
     
     def draw_detections(self, frame, detections, piece_positions):
-        """
-        Draw detection boxes with track IDs and square labels on frame.
-        
-        Args:
-            frame: Input frame
-            detections: List from detect_pieces()
-            piece_positions: Dictionary from map_pieces_to_squares()
-            
-        Returns:
-            Annotated frame
-        """
         vis = frame.copy()
         
         # Draw bounding boxes for detections with track IDs

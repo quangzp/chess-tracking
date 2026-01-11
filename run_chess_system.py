@@ -347,6 +347,7 @@ def main():
     parser.add_argument('--frame-skip', type=int, default=1,
                        help='Process every N frames (higher = faster but less accurate, useful for CPU)ict.json')
     parser.add_argument('--sqdict', type=str, default='sqdict.json')
+    parser.add_argument('--camera', type=str, default=0)
     
     args = parser.parse_args()
     
@@ -378,7 +379,7 @@ def main():
     
     # === Open camera once for entire workflow ===
     print("\n[INFO] Opening camera (will be used for entire session)...")
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    cap = cv2.VideoCapture(int(args.camera), cv2.CAP_DSHOW)
     if not cap.isOpened():
         print("❌ Camera could not be opened.")
         sys.exit(1)
